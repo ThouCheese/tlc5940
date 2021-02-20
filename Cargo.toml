@@ -3,6 +3,8 @@ name = "tlc5940"
 version = "0.0.0"
 authors = ["ThouCheese <luuk.wester@gmail.com>"]
 edition = "2018"
+description = "A library to interact with the tlc5940 led driver"
+license = "MIT"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
