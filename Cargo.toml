@@ -1,6 +1,6 @@
 [package]
-name = "tlc5940-raspberry"
-version = "0.1.0"
+name = "tlc5940"
+version = "0.0.0"
 authors = ["ThouCheese <luuk.wester@gmail.com>"]
 edition = "2018"
 
