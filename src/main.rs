@@ -1,6 +1,27 @@
-#![no_std]
-
 use gpio::{GpioOut, GpioValue};
+
+/// paars: sin
+/// grijs: blank
+/// blauw: sclk
+/// wit: xlat
+/// zwart: gsclk
+
+fn main() {
+    const LEN: usize = 48;
+    let sin = gpio::sysfs::SysFsGpioOutput::open(10).unwrap();
+    let sclk = gpio::sysfs::SysFsGpioOutput::open(11).unwrap();
+    let blank = gpio::sysfs::SysFsGpioOutput::open(27).unwrap();
+    let xlat = gpio::sysfs::SysFsGpioOutput::open(8).unwrap();
+    let gsclk = gpio::sysfs::SysFsGpioOutput::open(12).unwrap();
+
+    let mut ctrl = crate::TlcController::<_, LEN>::new(sin, sclk, blank, xlat, gsclk).unwrap();
+    ctrl.set_channel(3, 2312);
+    ctrl.update().unwrap();
+    for _ in 0..10 {
+        ctrl.cycle_pwm().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
 
 // private trait, we want to be able to do pulses
 trait GpioOutExt: GpioOut {
@@ -62,24 +83,25 @@ where
     pub fn update(&mut self) -> Result<(), Error> {
         self.update_init()?;
         let mut channel_counter = (self.colors.len() - 1) as isize;
-        let mut gsclk_counter = 0;
-        while gsclk_counter < 4096 {
-            if channel_counter >= 0 {
-                for i in (0..12).rev() {
-                    let val = self.get_pin_value_for_channel(channel_counter as usize, i);
-                    self.sin.set_value(val)?;
-                    self.sclk.pulse()?;
-                    self.gsclk.pulse()?;
-                    gsclk_counter += 1;
-                }
-                channel_counter -= 1;
-            } else {
-                self.sin.set_low()?;
-                self.gsclk.pulse()?;
-                gsclk_counter += 1
+        while channel_counter >= 0 {
+            for i in (0..12).rev() {
+                let val = self.get_pin_value_for_channel(channel_counter as usize, i);
+                self.sin.set_value(val)?;
+                self.sclk.pulse()?;
             }
+            channel_counter -= 1;
         }
+        self.sin.set_low()?;
+        self.cycle_pwm()?;
         self.update_post()
+    }
+
+    pub fn cycle_pwm(&mut self) -> Result<(), Error> {
+        let mut gsclk_counter = 0;
+        for _ in 0..4096 {
+            self.gsclk.pulse()?;
+        }
+        Ok(())
     }
 
     fn update_init(&mut self) -> Result<(), Error> {
@@ -88,8 +110,7 @@ where
 
     fn update_post(&mut self) -> Result<(), Error> {
         self.blank.set_high()?;
-        self.xlat.pulse()?;
-        Ok(())
+        self.xlat.pulse()
     }
 
     fn get_pin_value_for_channel(&self, channel: usize, bit: u8) -> GpioValue {
@@ -98,22 +119,5 @@ where
             1 => GpioValue::High,
             _ => unreachable!(),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test() {
-        const LEN: usize = 48;
-        let sin = gpio::sysfs::SysFsGpioOutput::open(1).unwrap();
-        let sclk = gpio::sysfs::SysFsGpioOutput::open(14).unwrap();
-        let blank = gpio::sysfs::SysFsGpioOutput::open(4).unwrap();
-        let xlat = gpio::sysfs::SysFsGpioOutput::open(10).unwrap();
-        let gsclk = gpio::sysfs::SysFsGpioOutput::open(11).unwrap();
-
-        let mut ctrl = crate::TlcController::<_, LEN>::new(sin, sclk, blank, xlat, gsclk).unwrap();
-        ctrl.set_channel(3, 12312);
-        ctrl.update().unwrap();
     }
 }
