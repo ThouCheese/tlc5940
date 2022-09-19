@@ -15,11 +15,26 @@ fn main() {
     let gsclk = gpio::sysfs::SysFsGpioOutput::open(12).unwrap();
 
     let mut ctrl = crate::TlcController::<_, LEN>::new(sin, sclk, blank, xlat, gsclk).unwrap();
-    ctrl.set_channel(3, 2312);
-    ctrl.update().unwrap();
-    for _ in 0..10 {
-        ctrl.cycle_pwm().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(100));
+    
+    let mut index: i32 = 0;
+    let mut direction: i32 = 1;
+    for _ in 0..200 {
+        ctrl.clear();
+        ctrl.set_channel(index as usize, 4095);
+        ctrl.update().unwrap();
+
+        if index == 47 {
+            direction = -1;
+        }
+        if index == 0 {
+            direction = 1;
+        }
+        index += direction;
+        
+        for _ in 0..10 {
+            ctrl.cycle_pwm().unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
     }
 }
 
@@ -92,24 +107,24 @@ where
             channel_counter -= 1;
         }
         self.sin.set_low()?;
-        self.cycle_pwm()?;
-        self.update_post()
+        self.update_post()?;
+        self.cycle_pwm()
     }
 
     pub fn cycle_pwm(&mut self) -> Result<(), Error> {
-        let mut gsclk_counter = 0;
         for _ in 0..4096 {
             self.gsclk.pulse()?;
         }
+        self.blank.pulse()?;
         Ok(())
     }
 
     fn update_init(&mut self) -> Result<(), Error> {
-        self.blank.set_low()
+        self.blank.set_high()
     }
 
     fn update_post(&mut self) -> Result<(), Error> {
-        self.blank.set_high()?;
+        self.blank.set_low()?;
         self.xlat.pulse()
     }
 
