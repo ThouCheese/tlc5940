@@ -10,3 +10,4 @@ license = "MIT"
 
 [dependencies]
 gpio = "0.4.1"
+rppal = "0.13.1"
