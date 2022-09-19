@@ -1,5 +1,5 @@
 use gpio::{GpioOut, GpioValue};
-
+use rppal::pwm::{Channel, Polarity, Pwm};
 /// paars: sin
 /// grijs: blank
 /// blauw: sclk
@@ -12,15 +12,15 @@ fn main() {
     let sclk = gpio::sysfs::SysFsGpioOutput::open(11).unwrap();
     let blank = gpio::sysfs::SysFsGpioOutput::open(27).unwrap();
     let xlat = gpio::sysfs::SysFsGpioOutput::open(8).unwrap();
-    let gsclk = gpio::sysfs::SysFsGpioOutput::open(12).unwrap();
-
-    let mut ctrl = crate::TlcController::<_, LEN>::new(sin, sclk, blank, xlat, gsclk).unwrap();
+    let channel = Channel::Pwm1;
+    
+    let mut ctrl = crate::TlcController::<_, LEN>::new(sin, sclk, blank, xlat, channel).unwrap();
     
     let mut index: i32 = 0;
     let mut direction: i32 = 1;
     for _ in 0..200 {
         ctrl.clear();
-        ctrl.set_channel(index as usize, 4095);
+        ctrl.set_channel(index as usize, 512);
         ctrl.update().unwrap();
 
         if index == 47 {
@@ -32,8 +32,8 @@ fn main() {
         index += direction;
         
         for _ in 0..10 {
-            ctrl.cycle_pwm().unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            ctrl.pulse_blank().unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
     }
 }
@@ -53,7 +53,7 @@ pub struct TlcController<Pin, const LEN: usize> {
     sclk: Pin,
     blank: Pin,
     xlat: Pin,
-    gsclk: Pin,
+    gsclk: Pwm,
     colors: [u16; LEN],
 }
 
@@ -66,13 +66,21 @@ where
         mut sclk: Pin,
         mut blank: Pin,
         mut xlat: Pin,
-        mut gsclk: Pin,
+        channel: Channel,
     ) -> Result<Self, Error> {
-        [&mut sin, &mut sclk, &mut xlat, &mut gsclk]
+        [&mut sin, &mut sclk, &mut xlat]
             .iter_mut()
             .try_for_each(|p| p.set_low())?;
         blank.set_high()?;
         let colors = [0; LEN];
+        let gsclk = Pwm::with_frequency(
+            channel, 
+            409_600.0, 
+            0.50, 
+            Polarity::Normal, 
+            true
+        ).unwrap();
+
         Ok(Self {
             sin,
             sclk,
@@ -107,16 +115,11 @@ where
             channel_counter -= 1;
         }
         self.sin.set_low()?;
-        self.update_post()?;
-        self.cycle_pwm()
+        self.update_post()
     }
 
-    pub fn cycle_pwm(&mut self) -> Result<(), Error> {
-        for _ in 0..4096 {
-            self.gsclk.pulse()?;
-        }
-        self.blank.pulse()?;
-        Ok(())
+    pub fn pulse_blank(&mut self) -> Result<(), Error> {
+        self.blank.pulse()
     }
 
     fn update_init(&mut self) -> Result<(), Error> {
@@ -125,7 +128,8 @@ where
 
     fn update_post(&mut self) -> Result<(), Error> {
         self.blank.set_low()?;
-        self.xlat.pulse()
+        self.xlat.pulse()?;
+        Ok(())
     }
 
     fn get_pin_value_for_channel(&self, channel: usize, bit: u8) -> GpioValue {

@@ -1,6 +1,8 @@
 #![no_std]
 
 use gpio::{GpioOut, GpioValue};
+use rppal::pwm::{Channel, Polarity, Pwm};
+
 
 // private trait, we want to be able to do pulses
 trait GpioOutExt: GpioOut {
@@ -17,7 +19,7 @@ pub struct TlcController<Pin, const LEN: usize> {
     sclk: Pin,
     blank: Pin,
     xlat: Pin,
-    gsclk: Pin,
+    _gsclk: Pwm,
     colors: [u16; LEN],
 }
 
@@ -30,19 +32,27 @@ where
         mut sclk: Pin,
         mut blank: Pin,
         mut xlat: Pin,
-        mut gsclk: Pin,
+        channel: Channel,
     ) -> Result<Self, Error> {
-        [&mut sin, &mut sclk, &mut xlat, &mut gsclk]
+        [&mut sin, &mut sclk, &mut xlat]
             .iter_mut()
             .try_for_each(|p| p.set_low())?;
         blank.set_high()?;
         let colors = [0; LEN];
+        let _gsclk = Pwm::with_frequency(
+            channel, 
+            409_600.0, 
+            0.50, 
+            Polarity::Normal, 
+            true
+        ).unwrap();
+
         Ok(Self {
             sin,
             sclk,
             blank,
             xlat,
-            gsclk,
+            _gsclk,
             colors,
         })
     }
@@ -62,32 +72,28 @@ where
     pub fn update(&mut self) -> Result<(), Error> {
         self.update_init()?;
         let mut channel_counter = (self.colors.len() - 1) as isize;
-        let mut gsclk_counter = 0;
-        while gsclk_counter < 4096 {
-            if channel_counter >= 0 {
-                for i in (0..12).rev() {
-                    let val = self.get_pin_value_for_channel(channel_counter as usize, i);
-                    self.sin.set_value(val)?;
-                    self.sclk.pulse()?;
-                    self.gsclk.pulse()?;
-                    gsclk_counter += 1;
-                }
-                channel_counter -= 1;
-            } else {
-                self.sin.set_low()?;
-                self.gsclk.pulse()?;
-                gsclk_counter += 1
+        while channel_counter >= 0 {
+            for i in (0..12).rev() {
+                let val = self.get_pin_value_for_channel(channel_counter as usize, i);
+                self.sin.set_value(val)?;
+                self.sclk.pulse()?;
             }
+            channel_counter -= 1;
         }
+        self.sin.set_low()?;
         self.update_post()
     }
 
+    pub fn pulse_blank(&mut self) -> Result<(), Error> {
+        self.blank.pulse()
+    }
+
     fn update_init(&mut self) -> Result<(), Error> {
-        self.blank.set_low()
+        self.blank.set_high()
     }
 
     fn update_post(&mut self) -> Result<(), Error> {
-        self.blank.set_high()?;
+        self.blank.set_low()?;
         self.xlat.pulse()?;
         Ok(())
     }
@@ -110,10 +116,11 @@ mod tests {
         let sclk = gpio::sysfs::SysFsGpioOutput::open(14).unwrap();
         let blank = gpio::sysfs::SysFsGpioOutput::open(4).unwrap();
         let xlat = gpio::sysfs::SysFsGpioOutput::open(10).unwrap();
-        let gsclk = gpio::sysfs::SysFsGpioOutput::open(11).unwrap();
+        let channel = rppal::pwm::Channel::Pwm1;
 
-        let mut ctrl = crate::TlcController::<_, LEN>::new(sin, sclk, blank, xlat, gsclk).unwrap();
-        ctrl.set_channel(3, 12312);
+
+        let mut ctrl = crate::TlcController::<_, LEN>::new(sin, sclk, blank, xlat, channel).unwrap();
+        ctrl.set_channel(3, 2312);
         ctrl.update().unwrap();
     }
 }
