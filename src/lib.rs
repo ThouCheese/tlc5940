@@ -1,8 +1,16 @@
 #![no_std]
 
 use gpio::{GpioOut, GpioValue};
-use rppal::pwm::{Channel, Polarity, Pwm};
+use rppal::{
+    pwm::{Channel, Polarity, Pwm},
+    spi::{Bus, Mode, Segment, SlaveSelect, Spi},
+};
 
+
+const WREN: u8 = 0b0110;
+const WRITE: u8 = 0b0010;
+const RDSR: u8 = 0b0101;
+const WIP: u8 = 1;
 
 // private trait, we want to be able to do pulses
 trait GpioOutExt: GpioOut {
@@ -20,6 +28,7 @@ pub struct TlcController<Pin, const LEN: usize> {
     blank: Pin,
     xlat: Pin,
     _gsclk: Pwm,
+    _spi: Spi,
     colors: [u16; LEN],
 }
 
@@ -33,6 +42,7 @@ where
         mut blank: Pin,
         mut xlat: Pin,
         channel: Channel,
+        bus: Bus,
     ) -> Result<Self, Error> {
         [&mut sin, &mut sclk, &mut xlat]
             .iter_mut()
@@ -47,12 +57,15 @@ where
             true
         ).unwrap();
 
+        let _spi = Spi::new(bus, SlaveSelect::Ss0, 5_000_000, Mode::Mode0).unwrap();
+
         Ok(Self {
             sin,
             sclk,
             blank,
             xlat,
             _gsclk,
+            _spi,
             colors,
         })
     }
@@ -71,16 +84,42 @@ where
 
     pub fn update(&mut self) -> Result<(), Error> {
         self.update_init()?;
+        self._spi.write(&[WREN]).unwrap();
+        
+        let mut buffer = [0u8; 76];
+        buffer[0] = WRITE;
+        
         let mut channel_counter = (self.colors.len() - 1) as isize;
+        let mut bit_counter =0;
+
         while channel_counter >= 0 {
             for i in (0..12).rev() {
-                let val = self.get_pin_value_for_channel(channel_counter as usize, i);
-                self.sin.set_value(val)?;
-                self.sclk.pulse()?;
+                // let val = self.get_pin_value_for_channel(channel_counter as usize, i);
+                let buf_index = bit_counter / 8;
+                let bit_index = bit_counter % 8;
+                buffer[buf_index + 4] |= (self.colors[channel_counter as usize] & (1 << i) >> i << bit_index) as u8;
+                bit_counter += 1;
+                // self.sin.set_value(val)?;
+                // self.sclk.pulse()?;
             }
             channel_counter -= 1;
         }
-        self.sin.set_low()?;
+        
+        self._spi.write(&buffer).unwrap();
+        
+        let mut read_buf = [0u8; 1];
+        loop {
+            self._spi.transfer_segments(&[
+                Segment::with_write(&[RDSR]),
+                Segment::with_read(&mut read_buf),
+            ]).unwrap();
+    
+            if read_buf[0] & WIP == 0 {
+                break;
+            }
+        }
+
+        // self.sin.set_low()?;
         self.update_post()
     }
 
@@ -117,9 +156,9 @@ mod tests {
         let blank = gpio::sysfs::SysFsGpioOutput::open(4).unwrap();
         let xlat = gpio::sysfs::SysFsGpioOutput::open(10).unwrap();
         let channel = rppal::pwm::Channel::Pwm1;
+        let bus = rppal::spi::Bus::Spi0;
 
-
-        let mut ctrl = crate::TlcController::<_, LEN>::new(sin, sclk, blank, xlat, channel).unwrap();
+        let mut ctrl = crate::TlcController::<_, LEN>::new(sin, sclk, blank, xlat, channel, bus).unwrap();
         ctrl.set_channel(3, 2312);
         ctrl.update().unwrap();
     }

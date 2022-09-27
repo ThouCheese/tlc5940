@@ -1,5 +1,9 @@
 use gpio::{GpioOut, GpioValue};
-use rppal::pwm::{Channel, Polarity, Pwm};
+use rppal::{
+    pwm::{Channel, Polarity, Pwm},
+    spi::{Bus, Mode, SlaveSelect, Spi, reverse_bits},
+};
+
 /// paars: sin
 /// grijs: blank
 /// blauw: sclk
@@ -8,13 +12,12 @@ use rppal::pwm::{Channel, Polarity, Pwm};
 
 fn main() {
     const LEN: usize = 48;
-    let sin = gpio::sysfs::SysFsGpioOutput::open(10).unwrap();
-    let sclk = gpio::sysfs::SysFsGpioOutput::open(11).unwrap();
     let blank = gpio::sysfs::SysFsGpioOutput::open(27).unwrap();
-    let xlat = gpio::sysfs::SysFsGpioOutput::open(8).unwrap();
-    let channel = Channel::Pwm1;
+    let xlat = gpio::sysfs::SysFsGpioOutput::open(25).unwrap();
+    let channel = Channel::Pwm0;
+    let bus = Bus::Spi0;
     
-    let mut ctrl = crate::TlcController::<_, LEN>::new(sin, sclk, blank, xlat, channel).unwrap();
+    let mut ctrl = crate::TlcController::<_, LEN>::new(blank, xlat, channel, bus).unwrap();
     
     let mut index: i32 = 0;
     let mut direction: i32 = 1;
@@ -49,11 +52,10 @@ trait GpioOutExt: GpioOut {
 impl<T: GpioOut> GpioOutExt for T {}
 
 pub struct TlcController<Pin, const LEN: usize> {
-    sin: Pin,
-    sclk: Pin,
     blank: Pin,
     xlat: Pin,
-    gsclk: Pwm,
+    _gsclk: Pwm,
+    _spi: Spi,
     colors: [u16; LEN],
 }
 
@@ -62,18 +64,15 @@ where
     Pin: GpioOut<Error = Error>,
 {
     pub fn new(
-        mut sin: Pin,
-        mut sclk: Pin,
         mut blank: Pin,
         mut xlat: Pin,
         channel: Channel,
+        bus: Bus,
     ) -> Result<Self, Error> {
-        [&mut sin, &mut sclk, &mut xlat]
-            .iter_mut()
-            .try_for_each(|p| p.set_low())?;
+        xlat.set_low()?;
         blank.set_high()?;
         let colors = [0; LEN];
-        let gsclk = Pwm::with_frequency(
+        let _gsclk = Pwm::with_frequency(
             channel, 
             409_600.0, 
             0.50, 
@@ -81,12 +80,13 @@ where
             true
         ).unwrap();
 
+        let _spi = Spi::new(bus, SlaveSelect::Ss0, 100_000, Mode::Mode0).unwrap();
+
         Ok(Self {
-            sin,
-            sclk,
             blank,
             xlat,
-            gsclk,
+            _gsclk,
+            _spi,
             colors,
         })
     }
@@ -105,16 +105,24 @@ where
 
     pub fn update(&mut self) -> Result<(), Error> {
         self.update_init()?;
+        let mut buffer = [0u8; 72];
+        
         let mut channel_counter = (self.colors.len() - 1) as isize;
+        let mut bit_counter = 0;
+
         while channel_counter >= 0 {
             for i in (0..12).rev() {
-                let val = self.get_pin_value_for_channel(channel_counter as usize, i);
-                self.sin.set_value(val)?;
-                self.sclk.pulse()?;
+                let buf_index = bit_counter / 8;
+                let bit_index = bit_counter % 8;
+                let val = (((self.colors[channel_counter as usize] & (1 << i)) >> i) << bit_index) as u8;
+                buffer[buf_index] |= val;
+                bit_counter += 1;
             }
             channel_counter -= 1;
         }
-        self.sin.set_low()?;
+        // reverse_bits(&mut buffer);
+        self._spi.write(&buffer).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
         self.update_post()
     }
 
