@@ -10,11 +10,11 @@ fn main() {
     const LEN: usize = 48;
     let sin = gpio::sysfs::SysFsGpioOutput::open(10).unwrap();
     let sclk = gpio::sysfs::SysFsGpioOutput::open(11).unwrap();
-    let blank = gpio::sysfs::SysFsGpioOutput::open(27).unwrap();
-    let xlat = gpio::sysfs::SysFsGpioOutput::open(8).unwrap();
-    let channel = Channel::Pwm1;
+    let xlat = gpio::sysfs::SysFsGpioOutput::open(25).unwrap();
+    let gsclk_channel = Channel::Pwm0;
+    let blank_channel = Channel::Pwm1;
     
-    let mut ctrl = crate::TlcController::<_, LEN>::new(sin, sclk, blank, xlat, channel).unwrap();
+    let mut ctrl = crate::TlcController::<_, LEN>::new(sin, sclk, xlat, gsclk_channel, blank_channel).unwrap();
     
     let mut index: i32 = 0;
     let mut direction: i32 = 1;
@@ -30,11 +30,7 @@ fn main() {
             direction = 1;
         }
         index += direction;
-        
-        for _ in 0..10 {
-            ctrl.pulse_blank().unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
     }
 }
 
@@ -51,9 +47,9 @@ impl<T: GpioOut> GpioOutExt for T {}
 pub struct TlcController<Pin, const LEN: usize> {
     sin: Pin,
     sclk: Pin,
-    blank: Pin,
+    blank: Pwm,
     xlat: Pin,
-    gsclk: Pwm,
+    _gsclk: Pwm,
     colors: [u16; LEN],
 }
 
@@ -64,29 +60,36 @@ where
     pub fn new(
         mut sin: Pin,
         mut sclk: Pin,
-        mut blank: Pin,
         mut xlat: Pin,
-        channel: Channel,
+        gsclk_channel: Channel,
+        blank_channel: Channel,
     ) -> Result<Self, Error> {
         [&mut sin, &mut sclk, &mut xlat]
             .iter_mut()
             .try_for_each(|p| p.set_low())?;
-        blank.set_high()?;
         let colors = [0; LEN];
-        let gsclk = Pwm::with_frequency(
-            channel, 
+        let _gsclk = Pwm::with_frequency(
+            gsclk_channel, 
             409_600.0, 
             0.50, 
             Polarity::Normal, 
             true
         ).unwrap();
 
+        let blank = Pwm::with_frequency(
+            blank_channel, 
+            100.0, 
+            0.50, 
+            Polarity::Normal, 
+            true
+        ).unwrap(); 
+
         Ok(Self {
             sin,
             sclk,
             blank,
             xlat,
-            gsclk,
+            _gsclk,
             colors,
         })
     }
@@ -118,16 +121,13 @@ where
         self.update_post()
     }
 
-    pub fn pulse_blank(&mut self) -> Result<(), Error> {
-        self.blank.pulse()
-    }
-
     fn update_init(&mut self) -> Result<(), Error> {
-        self.blank.set_high()
+        self.blank.set_duty_cycle(1.0).unwrap();
+        Ok(())
     }
 
     fn update_post(&mut self) -> Result<(), Error> {
-        self.blank.set_low()?;
+        self.blank.set_duty_cycle(0.5).unwrap();
         self.xlat.pulse()?;
         Ok(())
     }

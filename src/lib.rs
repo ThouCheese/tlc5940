@@ -17,7 +17,7 @@ impl<T: GpioOut> GpioOutExt for T {}
 pub struct TlcController<Pin, const LEN: usize> {
     sin: Pin,
     sclk: Pin,
-    blank: Pin,
+    blank: Pwm,
     xlat: Pin,
     _gsclk: Pwm,
     colors: [u16; LEN],
@@ -30,22 +30,29 @@ where
     pub fn new(
         mut sin: Pin,
         mut sclk: Pin,
-        mut blank: Pin,
         mut xlat: Pin,
-        channel: Channel,
+        gsclk_channel: Channel,
+        blank_channel: Channel,
     ) -> Result<Self, Error> {
         [&mut sin, &mut sclk, &mut xlat]
             .iter_mut()
             .try_for_each(|p| p.set_low())?;
-        blank.set_high()?;
         let colors = [0; LEN];
         let _gsclk = Pwm::with_frequency(
-            channel, 
+            gsclk_channel, 
             409_600.0, 
             0.50, 
             Polarity::Normal, 
             true
         ).unwrap();
+
+        let blank = Pwm::with_frequency(
+            blank_channel, 
+            100.0, 
+            0.50, 
+            Polarity::Normal, 
+            true
+        ).unwrap(); 
 
         Ok(Self {
             sin,
@@ -84,16 +91,13 @@ where
         self.update_post()
     }
 
-    pub fn pulse_blank(&mut self) -> Result<(), Error> {
-        self.blank.pulse()
-    }
-
     fn update_init(&mut self) -> Result<(), Error> {
-        self.blank.set_high()
+        self.blank.set_duty_cycle(1.0).unwrap();
+        Ok(())
     }
 
     fn update_post(&mut self) -> Result<(), Error> {
-        self.blank.set_low()?;
+        self.blank.set_duty_cycle(0.5).unwrap();
         self.xlat.pulse()?;
         Ok(())
     }
@@ -107,6 +111,7 @@ where
     }
 }
 
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -114,12 +119,12 @@ mod tests {
         const LEN: usize = 48;
         let sin = gpio::sysfs::SysFsGpioOutput::open(1).unwrap();
         let sclk = gpio::sysfs::SysFsGpioOutput::open(14).unwrap();
-        let blank = gpio::sysfs::SysFsGpioOutput::open(4).unwrap();
         let xlat = gpio::sysfs::SysFsGpioOutput::open(10).unwrap();
-        let channel = rppal::pwm::Channel::Pwm1;
+        let gsclk_channel = rppal::pwm::Channel::Pwm0;
+        let blank_channel = rppal::pwm::Channel::Pwm1;
 
 
-        let mut ctrl = crate::TlcController::<_, LEN>::new(sin, sclk, blank, xlat, channel).unwrap();
+        let mut ctrl = crate::TlcController::<_, LEN>::new(sin, sclk, xlat, gsclk_channel, blank_channel).unwrap();
         ctrl.set_channel(3, 2312);
         ctrl.update().unwrap();
     }
