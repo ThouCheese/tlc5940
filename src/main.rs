@@ -12,12 +12,12 @@ use rppal::{
 
 fn main() {
     const LEN: usize = 48;
-    let blank = gpio::sysfs::SysFsGpioOutput::open(27).unwrap();
     let xlat = gpio::sysfs::SysFsGpioOutput::open(25).unwrap();
-    let channel = Channel::Pwm0;
     let bus = Bus::Spi0;
+    let gsclk_channel = Channel::Pwm0;
+    let blank_channel = Channel::Pwm1;
     
-    let mut ctrl = crate::TlcController::<_, LEN>::new(blank, xlat, channel, bus).unwrap();
+    let mut ctrl = crate::TlcController::<_, LEN>::new(bus, gsclk_channel, blank_channel, xlat).unwrap();
     
     let mut index: i32 = 0;
     let mut direction: i32 = 1;
@@ -33,11 +33,7 @@ fn main() {
             direction = 1;
         }
         index += direction;
-        
-        for _ in 0..10 {
-            ctrl.pulse_blank().unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
     }
 }
 
@@ -52,10 +48,10 @@ trait GpioOutExt: GpioOut {
 impl<T: GpioOut> GpioOutExt for T {}
 
 pub struct TlcController<Pin, const LEN: usize> {
-    blank: Pin,
-    xlat: Pin,
-    _gsclk: Pwm,
     _spi: Spi,
+    _gsclk: Pwm,
+    blank: Pwm,
+    xlat: Pin,
     colors: [u16; LEN],
 }
 
@@ -64,16 +60,15 @@ where
     Pin: GpioOut<Error = Error>,
 {
     pub fn new(
-        mut blank: Pin,
-        mut xlat: Pin,
-        channel: Channel,
         bus: Bus,
+        gsclk_channel: Channel,
+        blank_channel: Channel,        
+        mut xlat: Pin,
     ) -> Result<Self, Error> {
         xlat.set_low()?;
-        blank.set_high()?;
         let colors = [0; LEN];
         let _gsclk = Pwm::with_frequency(
-            channel, 
+            gsclk_channel, 
             409_600.0, 
             0.50, 
             Polarity::Normal, 
@@ -82,11 +77,19 @@ where
 
         let _spi = Spi::new(bus, SlaveSelect::Ss0, 100_000, Mode::Mode0).unwrap();
 
+        let blank = Pwm::with_frequency(
+            blank_channel, 
+            100.0, 
+            0.50, 
+            Polarity::Normal, 
+            true
+        ).unwrap(); 
+
         Ok(Self {
+            _spi,
+            _gsclk,
             blank,
             xlat,
-            _gsclk,
-            _spi,
             colors,
         })
     }
@@ -126,16 +129,13 @@ where
         self.update_post()
     }
 
-    pub fn pulse_blank(&mut self) -> Result<(), Error> {
-        self.blank.pulse()
-    }
-
     fn update_init(&mut self) -> Result<(), Error> {
-        self.blank.set_high()
+        self.blank.set_duty_cycle(1.0).unwrap();
+        Ok(())
     }
 
     fn update_post(&mut self) -> Result<(), Error> {
-        self.blank.set_low()?;
+        self.blank.set_duty_cycle(0.5).unwrap();
         self.xlat.pulse()?;
         Ok(())
     }
